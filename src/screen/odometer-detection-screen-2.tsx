@@ -433,6 +433,13 @@ const OdometerDetectionScreen = () => {
         visible={historyVisible}
         onClose={() => setHistoryVisible(false)}
         history={historyData}
+        onEdit={(id: string, newValue: string) => {
+          setHistoryData(prev =>
+            prev.map(item =>
+              item.id === id ? {...item, value: newValue} : item,
+            ),
+          );
+        }}
       />
 
       <TouchableOpacity
