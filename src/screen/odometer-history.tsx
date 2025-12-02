@@ -187,11 +187,12 @@ const styles = StyleSheet.create({
   editInput: {
     width: '100%',
     borderWidth: 1,
-    borderColor: '#ccc',
+    borderColor: '#333',
     borderRadius: 5,
     padding: 10,
     fontSize: 16,
     marginBottom: 20,
+    color: '#333',
   },
   editButtons: {
     flexDirection: 'row',
