@@ -31,7 +31,7 @@ Before running this project, ensure you have the following installed:
 2. Install dependencies:
 
    ```bash
-   npm install
+   npm install --legacy-peer-deps
    # or
    yarn install
    ```
