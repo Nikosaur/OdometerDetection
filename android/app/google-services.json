@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "747752173598",
+    "project_id": "odometer-detection",
+    "storage_bucket": "odometer-detection.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:747752173598:android:f97b27a614cd02bc617e0f",
+        "android_client_info": {
+          "package_name": "com.odometerdetection"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDHMG2iUl9R1Ey9ZX8CV0lalmFvsz-7J_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
