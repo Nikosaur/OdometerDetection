@@ -12,6 +12,7 @@ import {
 import {Camera, useCameraDevice} from 'react-native-vision-camera';
 import {launchImageLibrary} from 'react-native-image-picker';
 import OdometerHistory from './odometer-history';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // TypeScript interfaces
 interface DetectionResult {
@@ -98,6 +99,36 @@ const OdometerDetectionScreen = () => {
 
     return () => sub.remove();
   }, []);
+
+  // Load history from AsyncStorage on component mount
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const storedHistory = await AsyncStorage.getItem('odometerHistory');
+        if (storedHistory) {
+          setHistoryData(JSON.parse(storedHistory));
+        }
+      } catch (error) {
+        console.error('Failed to load history:', error);
+      }
+    };
+    loadHistory();
+  }, []);
+
+  // Save history to AsyncStorage whenever historyData changes
+  useEffect(() => {
+    const saveHistory = async () => {
+      try {
+        await AsyncStorage.setItem(
+          'odometerHistory',
+          JSON.stringify(historyData),
+        );
+      } catch (error) {
+        console.error('Failed to save history:', error);
+      }
+    };
+    saveHistory();
+  }, [historyData]);
 
   const resetDetection = useCallback(() => {
     setOdometerType('');
@@ -426,7 +457,7 @@ const OdometerDetectionScreen = () => {
           {bottom: 150},
         ]}
         onPress={() => setHistoryVisible(true)}>
-        <Text style={styles.buttonText}>History</Text>
+        <Text style={styles.buttonText}>Riwayat</Text>
       </TouchableOpacity>
 
       <OdometerHistory
