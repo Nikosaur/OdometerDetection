@@ -12,6 +12,7 @@ import {
 import {Camera, useCameraDevice} from 'react-native-vision-camera';
 import {launchImageLibrary} from 'react-native-image-picker';
 import OdometerHistory from './odometer-history';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // TypeScript interfaces
 interface DetectionResult {
@@ -24,6 +25,13 @@ interface DetectionResult {
   detectionMethod?: string;
 }
 
+interface ImageHelpersModule {
+  detectOdometer(
+    path: string,
+    cropRegion?: {x: number; y: number; w: number; h: number},
+  ): Promise<DetectionResult>;
+}
+
 interface HistoryItem {
   id: string;
   type: string;
@@ -31,12 +39,7 @@ interface HistoryItem {
   date: string;
 }
 
-interface ImageHelpersModule {
-  detectOdometer(
-    path: string,
-    cropRegion?: {x: number; y: number; w: number; h: number},
-  ): Promise<DetectionResult>;
-}
+const STORAGE_KEY = '@odometer_history_v1';
 
 const OdometerDetectionScreen = () => {
   const camera = useRef<Camera>(null);
@@ -49,11 +52,42 @@ const OdometerDetectionScreen = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [appState, setAppState] = useState(AppState.currentState);
   const [cameraKey, setCameraKey] = useState(0);
-  const [historyVisible, setHistoryVisible] = useState(false);
   const [historyData, setHistoryData] = useState<HistoryItem[]>([]);
+  const [historyVisible, setHistoryVisible] = useState(false);
 
+  const handleEditHistory = useCallback(
+    (id: string, newValue: string) => {
+      const updatedHistory = historyData.map(item =>
+        item.id === id ? {...item, value: newValue} : item,
+      );
+      setHistoryData(updatedHistory);
+      saveHistoryToStorage(updatedHistory);
+    },
+    [historyData],
+  );
   const removeFilePrefix = (filePath: string) => {
     return filePath.replace(/^file:\/\//, '');
+  };
+
+  // helpers for AsyncStorage
+  const loadHistoryFromStorage = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed: HistoryItem[] = JSON.parse(raw);
+        setHistoryData(parsed);
+      }
+    } catch (e) {
+      console.warn('Failed to load history:', e);
+    }
+  };
+
+  const saveHistoryToStorage = async (data: HistoryItem[]) => {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.warn('Failed to save history:', e);
+    }
   };
 
   useEffect(() => {
@@ -97,6 +131,10 @@ const OdometerDetectionScreen = () => {
     });
 
     return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    loadHistoryFromStorage();
   }, []);
 
   const resetDetection = useCallback(() => {
@@ -152,18 +190,6 @@ const OdometerDetectionScreen = () => {
           ],
         );
         return;
-      }
-
-      if (detectedValue) {
-        setHistoryData(prev => [
-          ...prev,
-          {
-            id: Date.now().toString(),
-            type: detectedType,
-            value: detectedValue,
-            date: new Date().toLocaleString(),
-          },
-        ]);
       }
 
       if (confidence < 0.3) {
@@ -268,8 +294,19 @@ const OdometerDetectionScreen = () => {
 
       setOdometerType(detectedType);
       setOdometerValue(detectedValue);
+
+      // Save to history
+      const newItem: HistoryItem = {
+        id: Date.now().toString(),
+        type: detectedType,
+        value: detectedValue,
+        date: new Date().toISOString(),
+      };
+      const updatedHistory = [newItem, ...historyData];
+      setHistoryData(updatedHistory);
+      saveHistoryToStorage(updatedHistory);
     },
-    [resetDetection],
+    [resetDetection, historyData],
   );
 
   const processImage = useCallback(
@@ -420,29 +457,6 @@ const OdometerDetectionScreen = () => {
       </View>
 
       <TouchableOpacity
-        style={[
-          styles.buttonGallery,
-          isProcessing && styles.buttonDisabled,
-          {bottom: 150},
-        ]}
-        onPress={() => setHistoryVisible(true)}>
-        <Text style={styles.buttonText}>History</Text>
-      </TouchableOpacity>
-
-      <OdometerHistory
-        visible={historyVisible}
-        onClose={() => setHistoryVisible(false)}
-        history={historyData}
-        onEdit={(id: string, newValue: string) => {
-          setHistoryData(prev =>
-            prev.map(item =>
-              item.id === id ? {...item, value: newValue} : item,
-            ),
-          );
-        }}
-      />
-
-      <TouchableOpacity
         style={[styles.button, isProcessing && styles.buttonDisabled]}
         onPress={takePhoto}
         disabled={isProcessing}>
@@ -456,6 +470,12 @@ const OdometerDetectionScreen = () => {
         onPress={selectImageFromGallery}
         disabled={isProcessing}>
         <Text style={styles.buttonText}>Pilih dari Galeri</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.buttonHistory}
+        onPress={() => setHistoryVisible(true)}>
+        <Text style={styles.buttonText}>Riwayat</Text>
       </TouchableOpacity>
 
       {loading && (
@@ -482,6 +502,13 @@ const OdometerDetectionScreen = () => {
           </Text>
         </View>
       )}
+
+      <OdometerHistory
+        visible={historyVisible}
+        onClose={() => setHistoryVisible(false)}
+        history={historyData}
+        onEdit={handleEditHistory}
+      />
     </View>
   );
 };
@@ -519,6 +546,21 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 40,
     borderRadius: 25,
+    zIndex: 20,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 2},
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+  },
+  buttonHistory: {
+    position: 'absolute',
+    bottom: 150,
+    alignSelf: 'center',
+    backgroundColor: '#28a745',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
     zIndex: 20,
     elevation: 5,
     shadowColor: '#000',
