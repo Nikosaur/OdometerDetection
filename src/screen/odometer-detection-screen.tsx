@@ -9,11 +9,13 @@ import {
   ActivityIndicator,
   AppState,
   Image,
+  Platform,
 } from 'react-native';
 import {Camera, useCameraDevice} from 'react-native-vision-camera';
 import {launchImageLibrary} from 'react-native-image-picker';
 import {Share as RNShare} from 'react-native';
 import {captureScreen} from 'react-native-view-shot';
+import RNFS from 'react-native-fs';
 
 let ShareLib: any = null;
 try {
@@ -53,9 +55,64 @@ const OdometerDetectionScreen = () => {
   const [cameraKey, setCameraKey] = useState(0);
   const [isResultMode, setIsResultMode] = useState(false);
   const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
+
   const removeFilePrefix = (filePath: string) => {
     return filePath.replace(/^file:\/\//, '');
   };
+
+  // Cleanup temp files
+  const cleanupTempFiles = useCallback(async () => {
+    try {
+      const cacheDir = RNFS.CachesDirectoryPath;
+      const files = await RNFS.readDir(cacheDir);
+
+      // Delete files older than 15 minutes
+      const now = Date.now();
+      const FIFTEEN_MINUTES = 15 * 60 * 1000;
+
+      for (const file of files) {
+        if (file.mtime !== undefined) {
+          const fileAge = now - (file.mtime as Date).getTime();
+          if (fileAge > FIFTEEN_MINUTES) {
+            await RNFS.unlink(file.path).catch(err =>
+              console.warn('Failed to delete:', file.name, err),
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Cleanup error:', error);
+    }
+  }, []);
+
+  // Periodic cleanup every 10 minutes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      cleanupTempFiles();
+    }, 10 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [cleanupTempFiles]);
+
+  // Cleanup on unmount and app background
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', state => {
+      setAppState(state);
+
+      if (state === 'active') {
+        setCameraActive(true);
+        setCameraKey(k => k + 1);
+      } else {
+        setCameraActive(false);
+        cleanupTempFiles(); // cleanup when app goes background
+      }
+    });
+
+    return () => {
+      sub.remove();
+      cleanupTempFiles(); // cleanup on unmount
+    };
+  }, [cleanupTempFiles]);
 
   useEffect(() => {
     const requestCameraPermission = async () => {
@@ -107,16 +164,35 @@ const OdometerDetectionScreen = () => {
 
   const resetToCamera = useCallback(() => {
     setIsResultMode(false);
+
+    // Cleanup captured image file if it exists
+    if (capturedImageUri) {
+      const filePath = removeFilePrefix(capturedImageUri);
+      RNFS.unlink(filePath).catch(err =>
+        console.warn('Failed to delete image:', err),
+      );
+      if (Platform.OS === 'android') {
+        Image.getSize(
+          capturedImageUri,
+          () => {},
+          () => {},
+        );
+      }
+    }
+
     setCapturedImageUri(null);
     resetDetection();
     setCameraActive(true);
-  }, [resetDetection]);
+  }, [capturedImageUri, resetDetection]);
 
   const handleDetectionResult = useCallback(
     (imageData: DetectionResult | null) => {
       console.log('Image data:', imageData);
       setLoading(false);
       setIsProcessing(false);
+
+      // Cleanup immediately after processing
+      cleanupTempFiles();
 
       if (!imageData) {
         Alert.alert('Error', 'Tidak ada data yang dikembalikan dari model.', [
@@ -265,7 +341,7 @@ const OdometerDetectionScreen = () => {
       setOdometerType(detectedType);
       setOdometerValue(detectedValue);
     },
-    [resetDetection, resetToCamera],
+    [resetDetection, resetToCamera, cleanupTempFiles],
   );
 
   const processImage = useCallback(
@@ -295,6 +371,9 @@ const OdometerDetectionScreen = () => {
             console.error('Detection error:', err);
             setLoading(false);
             setIsProcessing(false);
+
+            // Cleanup even on error
+            cleanupTempFiles();
 
             let errorMessage = 'Terjadi kesalahan sistem.';
 
@@ -364,9 +443,10 @@ const OdometerDetectionScreen = () => {
   }, [isProcessing, processImage]);
 
   const handleShare = useCallback(async () => {
-    try {
-      let screenshotUri: string;
+    let screenshotUri: string | undefined;
+    let usedFallback = false; // Flag to prevent deleting the original photo if screenshot fails
 
+    try {
       try {
         screenshotUri = await captureScreen({
           format: 'jpg',
@@ -376,6 +456,8 @@ const OdometerDetectionScreen = () => {
         console.log('Screenshot captured at:', screenshotUri);
       } catch (captureError: any) {
         console.error('Failed to capture screen:', captureError);
+
+        // Fallback logic
         if (!capturedImageUri) {
           Alert.alert(
             'Error',
@@ -391,9 +473,14 @@ const OdometerDetectionScreen = () => {
         ) {
           imageUri = `file://${imageUri}`;
         }
+
         screenshotUri = imageUri;
+        usedFallback = true; // Mark that we are using the original image
         console.log('Using raw image as fallback:', screenshotUri);
       }
+
+      // Ensure screenshotUri is defined before proceeding
+      if (!screenshotUri) return;
 
       let fileUri = screenshotUri;
       if (!fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
@@ -403,7 +490,6 @@ const OdometerDetectionScreen = () => {
       const shareMessage = `Hasil Deteksi Odometer\n\nTipe: ${odometerType}\nNilai: ${odometerValue}`;
 
       console.log('Sharing screenshot from:', fileUri);
-      console.log('Share message:', shareMessage);
 
       if (ShareLib) {
         const shareOptions: any = {
@@ -424,12 +510,25 @@ const OdometerDetectionScreen = () => {
         };
 
         const result = await RNShare.share(shareOptions);
-
         if (result.action === RNShare.sharedAction) {
           console.log('Shared successfully with built-in Share');
-        } else if (result.action === RNShare.dismissedAction) {
-          console.log('Share dismissed');
         }
+      }
+
+      // --- CACHE CLEANUP (Added Logic) ---
+      // We only delete if:
+      // 1. It exists
+      // 2. It is in the cache directory
+      // 3. AND it is NOT the fallback image (don't delete the user's active photo)
+      if (
+        screenshotUri &&
+        !usedFallback &&
+        screenshotUri.includes(RNFS.CachesDirectoryPath)
+      ) {
+        const pathToDelete = removeFilePrefix(screenshotUri);
+        RNFS.unlink(pathToDelete)
+          .then(() => console.log('Temp screenshot file deleted'))
+          .catch(err => console.log('Failed to cleanup screenshot:', err));
       }
     } catch (error: any) {
       console.error('Share error:', error);
@@ -446,7 +545,7 @@ const OdometerDetectionScreen = () => {
         Alert.alert('Error', error.message || 'Gagal membagikan screenshot.');
       }
     }
-  }, [capturedImageUri, odometerType, odometerValue]);
+  }, [capturedImageUri, odometerType, odometerValue, removeFilePrefix]);
 
   // const requestPermissionManually = async () => {
   //   try {
