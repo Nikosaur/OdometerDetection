@@ -104,13 +104,13 @@ const OdometerDetectionScreen = () => {
         setCameraKey(k => k + 1);
       } else {
         setCameraActive(false);
-        cleanupTempFiles(); // cleanup when app goes background
+        cleanupTempFiles();
       }
     });
 
     return () => {
       sub.remove();
-      cleanupTempFiles(); // cleanup on unmount
+      cleanupTempFiles();
     };
   }, [cleanupTempFiles]);
 
@@ -372,7 +372,6 @@ const OdometerDetectionScreen = () => {
             setLoading(false);
             setIsProcessing(false);
 
-            // Cleanup even on error
             cleanupTempFiles();
 
             let errorMessage = 'Terjadi kesalahan sistem.';
@@ -444,7 +443,7 @@ const OdometerDetectionScreen = () => {
 
   const handleShare = useCallback(async () => {
     let screenshotUri: string | undefined;
-    let usedFallback = false; // Flag to prevent deleting the original photo if screenshot fails
+    let usedFallback = false;
 
     try {
       try {
@@ -475,11 +474,10 @@ const OdometerDetectionScreen = () => {
         }
 
         screenshotUri = imageUri;
-        usedFallback = true; // Mark that we are using the original image
+        usedFallback = true;
         console.log('Using raw image as fallback:', screenshotUri);
       }
 
-      // Ensure screenshotUri is defined before proceeding
       if (!screenshotUri) return;
 
       let fileUri = screenshotUri;
@@ -515,11 +513,6 @@ const OdometerDetectionScreen = () => {
         }
       }
 
-      // --- CACHE CLEANUP (Added Logic) ---
-      // We only delete if:
-      // 1. It exists
-      // 2. It is in the cache directory
-      // 3. AND it is NOT the fallback image (don't delete the user's active photo)
       if (
         screenshotUri &&
         !usedFallback &&
