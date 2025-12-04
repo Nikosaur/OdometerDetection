@@ -8,9 +8,19 @@ import {
   Alert,
   ActivityIndicator,
   AppState,
+  Image,
 } from 'react-native';
 import {Camera, useCameraDevice} from 'react-native-vision-camera';
 import {launchImageLibrary} from 'react-native-image-picker';
+import {Share as RNShare} from 'react-native';
+import {captureScreen} from 'react-native-view-shot';
+
+let ShareLib: any = null;
+try {
+  ShareLib = require('react-native-share').default;
+} catch (e) {
+  console.log('react-native-share not available, using built-in Share API');
+}
 
 // TypeScript interfaces
 interface DetectionResult {
@@ -41,6 +51,8 @@ const OdometerDetectionScreen = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [appState, setAppState] = useState(AppState.currentState);
   const [cameraKey, setCameraKey] = useState(0);
+  const [isResultMode, setIsResultMode] = useState(false);
+  const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
   const removeFilePrefix = (filePath: string) => {
     return filePath.replace(/^file:\/\//, '');
   };
@@ -93,6 +105,13 @@ const OdometerDetectionScreen = () => {
     setOdometerValue('');
   }, []);
 
+  const resetToCamera = useCallback(() => {
+    setIsResultMode(false);
+    setCapturedImageUri(null);
+    resetDetection();
+    setCameraActive(true);
+  }, [resetDetection]);
+
   const handleDetectionResult = useCallback(
     (imageData: DetectionResult | null) => {
       console.log('Image data:', imageData);
@@ -101,7 +120,7 @@ const OdometerDetectionScreen = () => {
 
       if (!imageData) {
         Alert.alert('Error', 'Tidak ada data yang dikembalikan dari model.', [
-          {text: 'OK', onPress: resetDetection},
+          {text: 'OK', onPress: resetToCamera},
         ]);
         return;
       }
@@ -135,7 +154,7 @@ const OdometerDetectionScreen = () => {
           [
             {
               text: 'Foto Ulang',
-              onPress: resetDetection,
+              onPress: resetToCamera,
               style: 'destructive',
             },
           ],
@@ -156,7 +175,7 @@ const OdometerDetectionScreen = () => {
           [
             {
               text: 'Foto Ulang',
-              onPress: resetDetection,
+              onPress: resetToCamera,
               style: 'destructive',
             },
             {text: 'Tetap Gunakan', style: 'cancel'},
@@ -178,7 +197,7 @@ const OdometerDetectionScreen = () => {
           [
             {
               text: 'Foto Ulang',
-              onPress: resetDetection,
+              onPress: resetToCamera,
               style: 'destructive',
             },
             {text: 'Gunakan Hasil Ini', style: 'cancel'},
@@ -196,7 +215,7 @@ const OdometerDetectionScreen = () => {
           [
             {
               text: 'Foto Ulang',
-              onPress: resetDetection,
+              onPress: resetToCamera,
               style: 'destructive',
             },
             {text: 'Gunakan Hasil Ini', style: 'cancel'},
@@ -214,7 +233,7 @@ const OdometerDetectionScreen = () => {
           [
             {
               text: 'Foto Ulang',
-              onPress: resetDetection,
+              onPress: resetToCamera,
               style: 'destructive',
             },
             {text: 'Gunakan Hasil Ini', style: 'cancel'},
@@ -234,7 +253,7 @@ const OdometerDetectionScreen = () => {
           [
             {
               text: 'Foto Ulang',
-              onPress: resetDetection,
+              onPress: resetToCamera,
               style: 'destructive',
             },
             {text: 'Gunakan Hasil Ini', style: 'cancel'},
@@ -246,11 +265,11 @@ const OdometerDetectionScreen = () => {
       setOdometerType(detectedType);
       setOdometerValue(detectedValue);
     },
-    [resetDetection],
+    [resetDetection, resetToCamera],
   );
 
   const processImage = useCallback(
-    async (imagePath: string) => {
+    async (imagePath: string, imageUri?: string) => {
       const {ImageHelpers} = NativeModules as {
         ImageHelpers: ImageHelpersModule;
       };
@@ -258,6 +277,14 @@ const OdometerDetectionScreen = () => {
       setLoading(true);
       setIsProcessing(true);
       resetDetection();
+
+      if (imageUri) {
+        setCapturedImageUri(imageUri);
+      } else {
+        setCapturedImageUri(`file://${imagePath}`);
+      }
+      setIsResultMode(true);
+      setCameraActive(false);
 
       setTimeout(() => {
         ImageHelpers.detectOdometer(imagePath)
@@ -283,12 +310,12 @@ const OdometerDetectionScreen = () => {
             }
 
             Alert.alert('Error', errorMessage, [
-              {text: 'OK', onPress: resetDetection},
+              {text: 'OK', onPress: () => resetToCamera()},
             ]);
           });
       }, 500);
     },
-    [handleDetectionResult, resetDetection],
+    [handleDetectionResult, resetDetection, resetToCamera],
   );
 
   const takePhoto = useCallback(async () => {
@@ -300,7 +327,7 @@ const OdometerDetectionScreen = () => {
     try {
       const photo = await camera.current.takePhoto();
       if (photo?.path) {
-        await processImage(photo.path);
+        await processImage(photo.path, `file://${photo.path}`);
       }
     } catch (err) {
       console.error('Camera error:', err);
@@ -325,7 +352,8 @@ const OdometerDetectionScreen = () => {
       if (result.assets && result.assets.length > 0) {
         const selectedImage = result.assets[0];
         if (selectedImage.uri) {
-          await processImage(removeFilePrefix(selectedImage.uri));
+          const imagePath = removeFilePrefix(selectedImage.uri);
+          await processImage(imagePath, selectedImage.uri);
         }
       }
     } catch (err) {
@@ -334,6 +362,91 @@ const OdometerDetectionScreen = () => {
       setIsProcessing(false);
     }
   }, [isProcessing, processImage]);
+
+  const handleShare = useCallback(async () => {
+    try {
+      let screenshotUri: string;
+
+      try {
+        screenshotUri = await captureScreen({
+          format: 'jpg',
+          quality: 0.9,
+          result: 'tmpfile',
+        });
+        console.log('Screenshot captured at:', screenshotUri);
+      } catch (captureError: any) {
+        console.error('Failed to capture screen:', captureError);
+        if (!capturedImageUri) {
+          Alert.alert(
+            'Error',
+            'Gagal mengambil screenshot dan tidak ada gambar yang dapat dibagikan.',
+          );
+          return;
+        }
+
+        let imageUri = capturedImageUri;
+        if (
+          !imageUri.startsWith('file://') &&
+          !imageUri.startsWith('content://')
+        ) {
+          imageUri = `file://${imageUri}`;
+        }
+        screenshotUri = imageUri;
+        console.log('Using raw image as fallback:', screenshotUri);
+      }
+
+      let fileUri = screenshotUri;
+      if (!fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
+        fileUri = `file://${fileUri}`;
+      }
+
+      const shareMessage = `Hasil Deteksi Odometer\n\nTipe: ${odometerType}\nNilai: ${odometerValue}`;
+
+      console.log('Sharing screenshot from:', fileUri);
+      console.log('Share message:', shareMessage);
+
+      if (ShareLib) {
+        const shareOptions: any = {
+          title: 'Hasil Deteksi Odometer',
+          message: shareMessage,
+          url: fileUri,
+          type: 'image/jpeg',
+        };
+
+        await ShareLib.open(shareOptions);
+        console.log('Shared successfully with react-native-share');
+      } else {
+        const shareOptions: any = {
+          url: fileUri,
+          type: 'image/jpeg',
+          title: 'Hasil Deteksi Odometer',
+          message: shareMessage,
+        };
+
+        const result = await RNShare.share(shareOptions);
+
+        if (result.action === RNShare.sharedAction) {
+          console.log('Shared successfully with built-in Share');
+        } else if (result.action === RNShare.dismissedAction) {
+          console.log('Share dismissed');
+        }
+      }
+    } catch (error: any) {
+      console.error('Share error:', error);
+      if (
+        error.message?.includes('RNViewShot') ||
+        error.message?.includes('captureScreen') ||
+        error.message?.includes('TurboModuleRegistry')
+      ) {
+        Alert.alert(
+          'Module Tidak Ditemukan',
+          'Fitur screenshot belum tersedia. Silakan rebuild aplikasi:\n\n1. Stop aplikasi\n2. Jalankan: npm run android',
+        );
+      } else if (error.message !== 'User did not share') {
+        Alert.alert('Error', error.message || 'Gagal membagikan screenshot.');
+      }
+    }
+  }, [capturedImageUri, odometerType, odometerValue]);
 
   // const requestPermissionManually = async () => {
   //   try {
@@ -373,44 +486,75 @@ const OdometerDetectionScreen = () => {
 
   return (
     <View style={styles.container}>
-      {cameraActive && (
-        <Camera
-          key={cameraKey}
-          ref={camera}
+      {isResultMode && capturedImageUri ? (
+        <Image
+          source={{uri: capturedImageUri}}
           style={styles.camera}
-          device={device}
-          isActive={cameraActive}
-          photo={true}
+          resizeMode="cover"
         />
+      ) : (
+        cameraActive && (
+          <Camera
+            key={cameraKey}
+            ref={camera}
+            style={styles.camera}
+            device={device}
+            isActive={cameraActive}
+            photo={true}
+          />
+        )
       )}
 
-      <View style={styles.guideOverlay}>
-        <View style={styles.guideBox}>
-          <View style={[styles.corner, styles.cornerTL]} />
-          <View style={[styles.corner, styles.cornerTR]} />
-          <View style={[styles.corner, styles.cornerBL]} />
-          <View style={[styles.corner, styles.cornerBR]} />
+      {!isResultMode && (
+        <View style={styles.guideOverlay}>
+          <View style={styles.guideBox}>
+            <View style={[styles.corner, styles.cornerTL]} />
+            <View style={[styles.corner, styles.cornerTR]} />
+            <View style={[styles.corner, styles.cornerBL]} />
+            <View style={[styles.corner, styles.cornerBR]} />
+          </View>
+          <Text style={styles.guideLabel}>
+            Sejajarkan odometer di dalam kotak
+          </Text>
         </View>
-        <Text style={styles.guideLabel}>
-          Sejajarkan odometer di dalam kotak
-        </Text>
-      </View>
+      )}
 
-      <TouchableOpacity
-        style={[styles.button, isProcessing && styles.buttonDisabled]}
-        onPress={takePhoto}
-        disabled={isProcessing}>
-        <Text style={styles.buttonText}>
-          {isProcessing ? 'Memproses...' : 'Ambil Foto'}
-        </Text>
-      </TouchableOpacity>
+      {isResultMode ? (
+        <>
+          <TouchableOpacity
+            style={[styles.button, styles.buttonTryAgain]}
+            onPress={resetToCamera}>
+            <Text style={styles.buttonText}>Coba Lagi</Text>
+          </TouchableOpacity>
 
-      <TouchableOpacity
-        style={[styles.buttonGallery, isProcessing && styles.buttonDisabled]}
-        onPress={selectImageFromGallery}
-        disabled={isProcessing}>
-        <Text style={styles.buttonText}>Pilih dari Galeri</Text>
-      </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.buttonGallery, styles.buttonShare]}
+            onPress={handleShare}>
+            <Text style={styles.buttonText}>Bagikan</Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <>
+          <TouchableOpacity
+            style={[styles.button, isProcessing && styles.buttonDisabled]}
+            onPress={takePhoto}
+            disabled={isProcessing}>
+            <Text style={styles.buttonText}>
+              {isProcessing ? 'Memproses...' : 'Ambil Foto'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.buttonGallery,
+              isProcessing && styles.buttonDisabled,
+            ]}
+            onPress={selectImageFromGallery}
+            disabled={isProcessing}>
+            <Text style={styles.buttonText}>Pilih dari Galeri</Text>
+          </TouchableOpacity>
+        </>
+      )}
 
       {loading && (
         <View style={styles.loadingOverlay}>
@@ -479,6 +623,12 @@ const styles = StyleSheet.create({
     shadowOffset: {width: 0, height: 2},
     shadowOpacity: 0.3,
     shadowRadius: 3,
+  },
+  buttonTryAgain: {
+    backgroundColor: '#28a745',
+  },
+  buttonShare: {
+    backgroundColor: '#17a2b8',
   },
   buttonDisabled: {
     backgroundColor: '#cccccc',

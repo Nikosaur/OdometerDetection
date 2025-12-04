@@ -21,7 +21,9 @@
     "react-native": "^0.75.5",
     "react-native-fs": "^2.20.0",
     "react-native-image-picker": "^8.2.1",
+    "react-native-share": "^12.2.1",
     "react-native-tflite": "^0.0.2",
+    "react-native-view-shot": "^4.0.3",
     "react-native-vision-camera": "^4.6.4"
   },
   "devDependencies": {

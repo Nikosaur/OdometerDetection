@@ -8,7 +8,7 @@
 import React from 'react';
 import {SafeAreaView, StyleSheet} from 'react-native';
 
-import OdometerDetectionScreen from './src/screen/odometer-detection-screen-2';
+import OdometerDetectionScreen from './src/screen/odometer-detection-screen';
 
 function App(): React.JSX.Element {
   return (
