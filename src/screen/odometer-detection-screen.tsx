@@ -17,6 +17,7 @@ import {Share as RNShare} from 'react-native';
 import {captureScreen} from 'react-native-view-shot';
 import RNFS from 'react-native-fs';
 
+// Import react-native-share jika tersedia
 let ShareLib: any = null;
 try {
   ShareLib = require('react-native-share').default;
@@ -24,7 +25,7 @@ try {
   console.log('react-native-share not available, using built-in Share API');
 }
 
-// TypeScript interfaces
+// TypeScript interface
 interface DetectionResult {
   type: string;
   value: string;
@@ -35,6 +36,7 @@ interface DetectionResult {
   detectionMethod?: string;
 }
 
+// Native module interface
 interface ImageHelpersModule {
   detectOdometer(
     path: string,
@@ -42,6 +44,7 @@ interface ImageHelpersModule {
   ): Promise<DetectionResult>;
 }
 
+// Komponen utama
 const OdometerDetectionScreen = () => {
   const camera = useRef<Camera>(null);
   const [hasPermission, setHasPermission] = useState(false);
@@ -60,13 +63,13 @@ const OdometerDetectionScreen = () => {
     return filePath.replace(/^file:\/\//, '');
   };
 
-  // Cleanup temp files
+  // Membersihkan temp files
   const cleanupTempFiles = useCallback(async () => {
     try {
       const cacheDir = RNFS.CachesDirectoryPath;
       const files = await RNFS.readDir(cacheDir);
 
-      // Delete files older than 15 minutes
+      // Hapus file yang lebih tua dari 15 menit
       const now = Date.now();
       const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
@@ -85,7 +88,7 @@ const OdometerDetectionScreen = () => {
     }
   }, []);
 
-  // Periodic cleanup every 10 minutes
+  // Pembersihan berkala setiap 10 menit
   useEffect(() => {
     const interval = setInterval(() => {
       cleanupTempFiles();
@@ -94,7 +97,7 @@ const OdometerDetectionScreen = () => {
     return () => clearInterval(interval);
   }, [cleanupTempFiles]);
 
-  // Cleanup on unmount and app background
+  // Pembersihan saat aplikasi berpindah ke latar belakang
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => {
       setAppState(state);
@@ -114,6 +117,7 @@ const OdometerDetectionScreen = () => {
     };
   }, [cleanupTempFiles]);
 
+  // Izin kamera saat komponen dimount
   useEffect(() => {
     const requestCameraPermission = async () => {
       try {
@@ -142,6 +146,7 @@ const OdometerDetectionScreen = () => {
     };
   }, []);
 
+  // Monitor perubahan status aplikasi
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => {
       setAppState(state);
@@ -165,7 +170,7 @@ const OdometerDetectionScreen = () => {
   const resetToCamera = useCallback(() => {
     setIsResultMode(false);
 
-    // Cleanup captured image file if it exists
+    // Hapus gambar yang diambil sebelumnya
     if (capturedImageUri) {
       const filePath = removeFilePrefix(capturedImageUri);
       RNFS.unlink(filePath).catch(err =>
@@ -185,13 +190,14 @@ const OdometerDetectionScreen = () => {
     setCameraActive(true);
   }, [capturedImageUri, resetDetection]);
 
+  // Handle hasil deteksi
   const handleDetectionResult = useCallback(
     (imageData: DetectionResult | null) => {
       console.log('Image data:', imageData);
       setLoading(false);
       setIsProcessing(false);
 
-      // Cleanup immediately after processing
+      // Bersihkan file sementara setelah pemrosesan
       cleanupTempFiles();
 
       if (!imageData) {
@@ -201,23 +207,17 @@ const OdometerDetectionScreen = () => {
         return;
       }
 
+      // Extract detection info
       const detectedType = imageData?.type || 'Unknown';
       const detectedValue = imageData?.value || '';
       const confidence = imageData?.confidence || 0;
-      // const digitCount = imageData?.digitCount || 0;
       const isValid = imageData?.isValid !== false;
-      // const wasCropped = imageData?.wasCropped || false;
-      // const detectionMethod = imageData?.detectionMethod || 'Unknown';
 
       // Log detection info
       console.log('=== DETECTION INFO ===');
       console.log('Type:', detectedType);
       console.log('Value:', detectedValue);
       console.log('Confidence:', (confidence * 100).toFixed(1) + '%');
-      // console.log('Digit Count:', digitCount);
-      // console.log('Is Valid:', isValid);
-      // console.log('Was Cropped:', wasCropped);
-      // console.log('Detection Method:', detectionMethod);
       console.log('=====================');
 
       // DETECTION INFO
@@ -238,6 +238,7 @@ const OdometerDetectionScreen = () => {
         return;
       }
 
+      // Validasi hasil deteksi berdasarkan confidence dan panjang nilai
       if (confidence < 0.3) {
         setOdometerType(detectedType);
         setOdometerValue(detectedValue);
@@ -318,6 +319,7 @@ const OdometerDetectionScreen = () => {
         return;
       }
 
+      // Validasi urutan angka jika informasi tersedia
       if (!isValid) {
         setOdometerType(detectedType);
         setOdometerValue(detectedValue);
@@ -344,6 +346,7 @@ const OdometerDetectionScreen = () => {
     [resetDetection, resetToCamera, cleanupTempFiles],
   );
 
+  // Proses gambar
   const processImage = useCallback(
     async (imagePath: string, imageUri?: string) => {
       const {ImageHelpers} = NativeModules as {
@@ -362,6 +365,7 @@ const OdometerDetectionScreen = () => {
       setIsResultMode(true);
       setCameraActive(false);
 
+      // Delay sedikit untuk UX
       setTimeout(() => {
         ImageHelpers.detectOdometer(imagePath)
           .then((imageData: DetectionResult) =>
@@ -396,6 +400,7 @@ const OdometerDetectionScreen = () => {
     [handleDetectionResult, resetDetection, resetToCamera],
   );
 
+  // Ambil foto dari kamera
   const takePhoto = useCallback(async () => {
     if (isProcessing || !device || !camera.current) {
       console.log('Cannot take photo: processing or no device');
@@ -414,6 +419,7 @@ const OdometerDetectionScreen = () => {
     }
   }, [isProcessing, device, processImage]);
 
+  // Pilih gambar dari galeri
   const selectImageFromGallery = useCallback(async () => {
     if (isProcessing) {
       console.log('Already processing an image');
@@ -441,6 +447,7 @@ const OdometerDetectionScreen = () => {
     }
   }, [isProcessing, processImage]);
 
+  // Share handler hasil deteksi
   const handleShare = useCallback(async () => {
     let screenshotUri: string | undefined;
     let usedFallback = false;
@@ -540,31 +547,6 @@ const OdometerDetectionScreen = () => {
     }
   }, [capturedImageUri, odometerType, odometerValue, removeFilePrefix]);
 
-  // const requestPermissionManually = async () => {
-  //   try {
-  //     const status = await Camera.requestCameraPermission();
-  //     console.log('Manual permission request:', status);
-  //     const granted = status === 'granted';
-  //     setHasPermission(granted);
-
-  //     if (!granted) {
-  //       Alert.alert(
-  //         'Izin Ditolak',
-  //         'Silakan berikan izin kamera di pengaturan aplikasi untuk melanjutkan.',
-  //         [
-  //           {text: 'Batal', style: 'cancel'},
-  //           {
-  //             text: 'Buka Pengaturan',
-  //             onPress: () => Linking.openSettings(),
-  //           },
-  //         ],
-  //       );
-  //     }
-  //   } catch (error) {
-  //     console.error('Manual permission error:', error);
-  //   }
-  // };
-
   if (device == null || !hasPermission) {
     return (
       <View style={styles.container}>
@@ -576,6 +558,7 @@ const OdometerDetectionScreen = () => {
     );
   }
 
+  // Render utama
   return (
     <View style={styles.container}>
       {isResultMode && capturedImageUri ? (
@@ -676,6 +659,7 @@ const OdometerDetectionScreen = () => {
   );
 };
 
+// StyleSheet
 const styles = StyleSheet.create({
   container: {
     flex: 1,

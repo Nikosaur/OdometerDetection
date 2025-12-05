@@ -17,12 +17,14 @@ import kotlin.math.max
 import kotlin.math.min
 import org.tensorflow.lite.Interpreter
 
+// Data class untuk menyimpan hasil deteksi box
 data class BoxDetection(
     val box: FloatArray,
     val confidence: Float,
     val label: String
 )
 
+// Data class untuk ringkasan prediksi
 data class PredictionSummary(
     val value: String,
     val type: String?,
@@ -30,6 +32,7 @@ data class PredictionSummary(
     val avgConfidence: Float
 )
 
+// Data class untuk hasil letterbox
 data class LetterboxResult(
     val bitmap: Bitmap,
     val scale: Float,
@@ -38,6 +41,7 @@ data class LetterboxResult(
     val targetSize: Int
 )
 
+// Modul React Native untuk bantuan gambar
 class ImageHelpersModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 

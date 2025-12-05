@@ -7,19 +7,15 @@
 
 import React, {useEffect} from 'react';
 import {SafeAreaView, StyleSheet} from 'react-native';
-import RNFS from 'react-native-fs'; // Import RNFS
-
+import RNFS from 'react-native-fs';
 import OdometerDetectionScreen from './src/screen/odometer-detection-screen';
 
-// Defined outside component to keep it clean
+// Pembersihan cache saat startup
 const clearCacheOnStartup = async () => {
   try {
     const cacheDir = RNFS.CachesDirectoryPath;
     console.log('Starting cache cleanup at:', cacheDir);
 
-    // 1. Clean Camera Folder (Vision Camera specific)
-    // Note: The folder name might change depending on library version,
-    // but checking for 'mrousavy' is usually safe.
     const cameraFolder = `${cacheDir}/mrousavy-vision-camera`;
     const cameraFolderExists = await RNFS.exists(cameraFolder);
 
@@ -33,11 +29,9 @@ const clearCacheOnStartup = async () => {
       console.log('Vision Camera folder cleared');
     }
 
-    // 2. Clean Root Cache & Image Picker Folders
     const files = await RNFS.readDir(cacheDir);
 
     for (const file of files) {
-      // A. Delete loose temp files (jpg/png/tmp) in the root cache folder
       if (
         file.isFile() &&
         (file.name.endsWith('.jpg') ||
@@ -48,7 +42,6 @@ const clearCacheOnStartup = async () => {
         await RNFS.unlink(file.path).catch(() => {});
       }
 
-      // B. Target Image Picker specific temp folders (recursively delete)
       if (
         file.isDirectory() &&
         (file.name.includes('rn_image_picker') ||
@@ -63,8 +56,8 @@ const clearCacheOnStartup = async () => {
   }
 };
 
+// Komponen utama aplikasi
 function App(): React.JSX.Element {
-  // Run cleanup once when App mounts
   useEffect(() => {
     clearCacheOnStartup();
   }, []);
@@ -76,10 +69,11 @@ function App(): React.JSX.Element {
   );
 }
 
+// StyleSheet utama
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'black', // Added background color to match your screen
+    backgroundColor: 'black',
   },
 });
 
