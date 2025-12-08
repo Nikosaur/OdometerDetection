@@ -58,7 +58,7 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
     private fun loadModel() {
         try {
             val assetManager = reactApplicationContext.assets
-            val modelPath = "weights_float16.tflite"
+            val modelPath = "weightsfull_float16.tflite"
             val afd = assetManager.openFd(modelPath)
             val modelBuffer = loadModelFile(afd)
             val options = Interpreter.Options()
