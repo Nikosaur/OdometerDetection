@@ -91,44 +91,109 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         }
 
         try {
-            val original = BitmapFactory.decodeFile(imagePath)
-            if (original == null) {
-                promise.reject("IMAGE_ERROR", "Failed to decode image file: $imagePath")
+            // Log device info for remote debugging
+            val sdk = android.os.Build.VERSION.SDK_INT
+            val model = android.os.Build.MODEL ?: "unknown"
+            android.util.Log.d("DETECT_INFO", "detectOdometer called on SDK=$sdk model=$model path=$imagePath")
+
+            // Prepare decode options and downsample if image is large
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            if (imagePath.startsWith("content://")) {
+                val uri = android.net.Uri.parse(imagePath)
+                reactApplicationContext.contentResolver.openInputStream(uri).use { stream ->
+                    if (stream == null) {
+                        promise.reject("IMAGE_ERROR", "Cannot open content uri: $imagePath")
+                        return
+                    }
+                    BitmapFactory.decodeStream(stream, null, options)
+                }
+            } else {
+                val filePath = imagePath.removePrefix("file://")
+                BitmapFactory.decodeFile(filePath, options)
+            }
+
+            // compute sensible inSampleSize to limit max dimension (e.g. 1600)
+            val maxDim = 1600
+            var inSample = 1
+            val width = options.outWidth
+            val height = options.outHeight
+            if (width > 0 && height > 0) {
+                while (width / inSample > maxDim || height / inSample > maxDim) {
+                    inSample *= 2
+                }
+            }
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = inSample
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+
+            // Decode actual bitmap (handle content:// or file://)
+            val original: Bitmap? = try {
+                if (imagePath.startsWith("content://")) {
+                    val uri = android.net.Uri.parse(imagePath)
+                    reactApplicationContext.contentResolver.openInputStream(uri).use { stream ->
+                        BitmapFactory.decodeStream(stream, null, decodeOptions)
+                    }
+                } else {
+                    val filePath = imagePath.removePrefix("file://")
+                    BitmapFactory.decodeFile(filePath, decodeOptions)
+                }
+            } catch (oom: OutOfMemoryError) {
+                System.gc()
+                promise.reject("MEMORY_ERROR", "OutOfMemory while decoding image on SDK=$sdk model=$model")
                 return
             }
 
-            val fullSummary = runPredictionPass(original, isCenterCrop = false)
+            if (original == null) {
+                promise.reject("IMAGE_ERROR", "Failed to decode image: $imagePath")
+                return
+            }
 
-            val cropSummary = runPredictionPass(original, isCenterCrop = true)
+            // Run detections with safeguards for OOM
+            val fullSummary = try {
+                runPredictionPass(original, isCenterCrop = false)
+            } catch (oom: OutOfMemoryError) {
+                original.recycle()
+                System.gc()
+                promise.reject("MEMORY_ERROR", "OOM during inference on SDK=$sdk model=$model")
+                return
+            }
 
+            val cropSummary = try {
+                runPredictionPass(original, isCenterCrop = true)
+            } catch (oom: OutOfMemoryError) {
+                // proceed with fullSummary if crop pass OOMs
+                android.util.Log.w("DETECT_WARN", "OOM during crop pass, continuing with fullSummary")
+                PredictionSummary("", null, 0, 0f)
+            }
+
+            // choose best result (existing logic)
             var best = fullSummary
             var decision = "Original"
-
             if (cropSummary.digitCount > fullSummary.digitCount) {
-                best = cropSummary
-                decision = "Cropped"
+                best = cropSummary; decision = "Cropped"
             } else if (cropSummary.digitCount == fullSummary.digitCount && fullSummary.digitCount > 0) {
-                if (cropSummary.type != null && fullSummary.type == null) {
-                    best = cropSummary
-                    decision = "Cropped"
-                } else if (cropSummary.avgConfidence > fullSummary.avgConfidence) {
-                    best = cropSummary
-                    decision = "Cropped"
-                }
+                if (cropSummary.type != null && fullSummary.type == null) { best = cropSummary; decision = "Cropped" }
+                else if (cropSummary.avgConfidence > fullSummary.avgConfidence) { best = cropSummary; decision = "Cropped" }
             }
 
             original.recycle()
+            System.gc()
 
-            val result = Arguments.createMap()
-            result.putString("value", best.value)
-            result.putString("type", best.type ?: "Tidak Terdeteksi")
-            result.putDouble("confidence", best.avgConfidence.toDouble())
-            result.putString("detectionMethod", decision)
+            val result = Arguments.createMap().apply {
+                putString("value", best.value)
+                putString("type", best.type ?: "Tidak Terdeteksi")
+                putDouble("confidence", best.avgConfidence.toDouble())
+                putString("detectionMethod", decision)
+                putInt("sdk", sdk)
+                putString("deviceModel", model)
+            }
 
             promise.resolve(result)
         } catch (e: Exception) {
             android.util.Log.e("DETECT_ERROR", "Detection failed", e)
-            promise.reject("DETECT_ERROR", e.message)
+            System.gc()
+            promise.reject("DETECT_ERROR", e.message ?: "unknown")
         }
     }
 
