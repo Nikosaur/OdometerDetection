@@ -17,14 +17,14 @@ import kotlin.math.max
 import kotlin.math.min
 import org.tensorflow.lite.Interpreter
 
-// Data class for box detection results
+// Data class untuk deteksi kotak
 data class BoxDetection(
     val box: FloatArray,
     val confidence: Float,
     val label: String
 )
 
-// Data class for prediction summary
+// Data class untuk ringkasan prediksi
 data class PredictionSummary(
     val value: String,
     val type: String?,
@@ -32,7 +32,7 @@ data class PredictionSummary(
     val avgConfidence: Float
 )
 
-// Data class for letterbox result
+// Data class untuk hasil letterbox
 data class LetterboxResult(
     val bitmap: Bitmap,
     val scale: Float,
@@ -148,43 +148,63 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
                 return
             }
 
-            // 3. FIX ROTATION (Added Logic)
+            // 3. FIX ROTATION (PERBAIKAN FINAL)
+            // Bagian ini sekarang menangani Content URI (Samsung/Pixel) DAN File Path (Xiaomi/Poco)
             try {
-                // Only attempt Exif reading on file paths, as content streams require different handling
-                // and usually come pre-oriented from Gallery pickers.
-                if (!imagePath.startsWith("content://")) {
+                var rotationInDegrees = 0
+                
+                if (imagePath.startsWith("content://")) {
+                    val uri = android.net.Uri.parse(imagePath)
+                    reactApplicationContext.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        // Baca EXIF langsung dari Stream
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                            val exifInterface = ExifInterface(inputStream)
+                            val orientation = exifInterface.getAttributeInt(
+                                ExifInterface.TAG_ORIENTATION,
+                                ExifInterface.ORIENTATION_UNDEFINED
+                            )
+                            rotationInDegrees = when (orientation) {
+                                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                                ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                                else -> 0
+                            }
+                        }
+                    }
+                } else {
                     val filePath = imagePath.removePrefix("file://")
                     val exifInterface = ExifInterface(filePath)
                     val orientation = exifInterface.getAttributeInt(
                         ExifInterface.TAG_ORIENTATION,
                         ExifInterface.ORIENTATION_UNDEFINED
                     )
-
-                    val rotationInDegrees = when (orientation) {
+                    rotationInDegrees = when (orientation) {
                         ExifInterface.ORIENTATION_ROTATE_90 -> 90
                         ExifInterface.ORIENTATION_ROTATE_180 -> 180
                         ExifInterface.ORIENTATION_ROTATE_270 -> 270
                         else -> 0
                     }
-
-                    if (rotationInDegrees != 0) {
-                        val matrix = Matrix()
-                        matrix.postRotate(rotationInDegrees.toFloat())
-                        
-                        val rotatedBitmap = Bitmap.createBitmap(
-                            original, 0, 0, original.width, original.height, matrix, true
-                        )
-                        
-                        if (original != rotatedBitmap) {
-                            original.recycle()
-                        }
-                        original = rotatedBitmap
-                        android.util.Log.d("ROTATION_INFO", "Rotated image by $rotationInDegrees degrees")
-                    }
                 }
+
+                // EKSEKUSI PEMUTARAN (Berlaku untuk SEMUA HP)
+                if (rotationInDegrees != 0) {
+                    val matrix = Matrix()
+                    matrix.postRotate(rotationInDegrees.toFloat())
+                    
+                    val rotatedBitmap = Bitmap.createBitmap(
+                        original, 0, 0, original.width, original.height, matrix, true
+                    )
+                    
+                    if (original != rotatedBitmap) {
+                        original.recycle()
+                    }
+                    original = rotatedBitmap
+                    android.util.Log.d("ROTATION_INFO", "Rotated image by $rotationInDegrees degrees")
+                }
+
             } catch (e: Exception) {
                 android.util.Log.e("ROTATION_ERROR", "Failed to correct orientation", e)
-                // Continue with original bitmap even if rotation fails
+                // Jika rotasi gagal, lanjut pakai gambar original apa adanya
             }
 
             // 4. INFERENCE (Run Predictions)
@@ -280,154 +300,4 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
 
     private fun parseDetections(detections: List<BoxDetection>): PredictionSummary {
         val digits = detections.filter { it.label.matches(Regex("^[0-9]$")) }.toMutableList()
-        val typeDetections = detections.filter { it.label == "Analog" || it.label == "Digital" }
-        val bestType = typeDetections.maxByOrNull { it.confidence }?.label
-
-        if (digits.isEmpty()) {
-            return PredictionSummary("", bestType, 0, 0f)
-        }
-
-        digits.sortBy { it.box[0] }
-
-        val value = digits.joinToString("") { it.label }
-        val avgConf = digits.map { it.confidence }.average().toFloat()
-
-        return PredictionSummary(value, bestType, digits.size, avgConf)
-    }
-
-    private fun cropCenterWithMargin(source: Bitmap, targetW: Int, targetH: Int, marginPx: Int): Bitmap {
-        val imgW = source.width
-        val imgH = source.height
-
-        val desiredW = targetW + marginPx
-        val desiredH = targetH + marginPx
-
-        var cropX = (imgW - desiredW) / 2
-        var cropY = (imgH - desiredH) / 2
-        var cropW = desiredW
-        var cropH = desiredH
-
-        if (cropX < 0) { cropX = 0; cropW = imgW }
-        if (cropY < 0) { cropY = 0; cropH = imgH }
-
-        val largeCrop = Bitmap.createBitmap(source, cropX, cropY, cropW, cropH)
-        val resized = Bitmap.createScaledBitmap(largeCrop, targetW, targetH, true)
-        largeCrop.recycle()
-        return resized
-    }
-
-    private fun letterboxBitmap(source: Bitmap, targetSize: Int): LetterboxResult {
-        val originalWidth = source.width
-        val originalHeight = source.height
-        val scale = min(targetSize.toFloat() / originalWidth, targetSize.toFloat() / originalHeight)
-        val newWidth = (originalWidth * scale).toInt()
-        val newHeight = (originalHeight * scale).toInt()
-
-        val background = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(background)
-        canvas.drawColor(Color.BLACK)
-
-        val padX = (targetSize - newWidth) / 2f
-        val padY = (targetSize - newHeight) / 2f
-
-        val scaled = Bitmap.createScaledBitmap(source, newWidth, newHeight, true)
-        canvas.drawBitmap(scaled, padX, padY, Paint())
-        scaled.recycle()
-
-        return LetterboxResult(background, scale, padX, padY, targetSize)
-    }
-
-    private fun preprocessImage(bitmap: Bitmap, targetSize: Int): ByteBuffer {
-        val scaled = if (bitmap.width != targetSize || bitmap.height != targetSize) {
-            Bitmap.createScaledBitmap(bitmap, targetSize, targetSize, true)
-        } else {
-            bitmap
-        }
-
-        val inputBuffer = ByteBuffer.allocateDirect(1 * targetSize * targetSize * 3 * 4)
-        inputBuffer.order(ByteOrder.nativeOrder())
-        val intValues = IntArray(targetSize * targetSize)
-        scaled.getPixels(intValues, 0, targetSize, 0, 0, targetSize, targetSize)
-
-        for (pixel in intValues) {
-            val r = ((pixel shr 16) and 0xFF) / 255.0f
-            val g = ((pixel shr 8) and 0xFF) / 255.0f
-            val b = (pixel and 0xFF) / 255.0f
-            inputBuffer.putFloat(r)
-            inputBuffer.putFloat(g)
-            inputBuffer.putFloat(b)
-        }
-        inputBuffer.rewind()
-
-        if (scaled !== bitmap) scaled.recycle()
-        return inputBuffer
-    }
-
-    private fun getRawDetections(output: Array<Array<FloatArray>>): List<BoxDetection> {
-        val classNames = listOf("0","1","2","3","4","5","6","7","8","9","Analog","Digital")
-        val confThreshold = 0.3f
-        val iouThreshold = 0.5f
-
-        val all = mutableListOf<BoxDetection>()
-        val channels = output[0]
-        val numAnchors = channels[0].size
-
-        for (i in 0 until numAnchors) {
-            var maxClassIndex = -1
-            var maxClassConf = 0.0f
-            for (j in 4 until (4 + classNames.size)) {
-                val conf = channels[j][i]
-                if (conf > maxClassConf) {
-                    maxClassConf = conf
-                    maxClassIndex = j - 4
-                }
-            }
-
-            if (maxClassConf > confThreshold && maxClassIndex >= 0 && maxClassIndex < classNames.size) {
-                val label = classNames[maxClassIndex]
-                val cx = channels[0][i]
-                val cy = channels[1][i]
-                val w = channels[2][i]
-                val h = channels[3][i]
-
-                val x1 = cx - w / 2
-                val y1 = cy - h / 2
-                val x2 = cx + w / 2
-                val y2 = cy + h / 2
-
-                all.add(BoxDetection(floatArrayOf(x1, y1, x2, y2), maxClassConf, label))
-            }
-        }
-
-        return applyNMS(all, iouThreshold)
-    }
-
-    private fun applyNMS(detections: List<BoxDetection>, iouThreshold: Float): List<BoxDetection> {
-        val sorted = detections.sortedByDescending { it.confidence }.toMutableList()
-        val kept = mutableListOf<BoxDetection>()
-        while (sorted.isNotEmpty()) {
-            val best = sorted.removeAt(0)
-            kept.add(best)
-            val iterator = sorted.iterator()
-            while (iterator.hasNext()) {
-                val next = iterator.next()
-                if (calculateIoU(best.box, next.box) > iouThreshold) {
-                    iterator.remove()
-                }
-            }
-        }
-        return kept
-    }
-
-    private fun calculateIoU(box1: FloatArray, box2: FloatArray): Float {
-        val x1 = max(box1[0], box2[0])
-        val y1 = max(box1[1], box2[1])
-        val x2 = min(box1[2], box2[2])
-        val y2 = min(box1[3], box2[3])
-        val inter = max(0f, x2 - x1) * max(0f, y2 - y1)
-        val a1 = max(0f, box1[2] - box1[0]) * max(0f, box1[3] - box1[1])
-        val a2 = max(0f, box2[2] - box2[0]) * max(0f, box2[3] - box2[1])
-        val union = a1 + a2 - inter
-        return if (union > 0f) inter / union else 0f
-    }
-}
+        val typeDetect
