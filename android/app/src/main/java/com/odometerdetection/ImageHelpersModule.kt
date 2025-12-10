@@ -4,9 +4,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
+import android.media.ExifInterface
 import com.facebook.react.bridge.*
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -17,14 +17,14 @@ import kotlin.math.max
 import kotlin.math.min
 import org.tensorflow.lite.Interpreter
 
-// Data class untuk menyimpan hasil deteksi box
+// Data class for box detection results
 data class BoxDetection(
     val box: FloatArray,
     val confidence: Float,
     val label: String
 )
 
-// Data class untuk ringkasan prediksi
+// Data class for prediction summary
 data class PredictionSummary(
     val value: String,
     val type: String?,
@@ -32,7 +32,7 @@ data class PredictionSummary(
     val avgConfidence: Float
 )
 
-// Data class untuk hasil letterbox
+// Data class for letterbox result
 data class LetterboxResult(
     val bitmap: Bitmap,
     val scale: Float,
@@ -41,7 +41,6 @@ data class LetterboxResult(
     val targetSize: Int
 )
 
-// Modul React Native untuk bantuan gambar
 class ImageHelpersModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
@@ -54,7 +53,7 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         loadModel()
     }
 
-    // load model dari assets
+    // Load model from assets
     private fun loadModel() {
         try {
             val assetManager = reactApplicationContext.assets
@@ -75,14 +74,12 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    // Fungsi load model file
     private fun loadModelFile(fd: android.content.res.AssetFileDescriptor): MappedByteBuffer {
         val inputStream = FileInputStream(fd.fileDescriptor)
         val channel = inputStream.channel
         return channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
     }
 
-    // Menjalankan deteksi odometer
     @ReactMethod
     fun detectOdometer(imagePath: String, promise: Promise) {
         if (tfliteInterpreter == null) {
@@ -91,13 +88,15 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         }
 
         try {
-            // Log device info for remote debugging
+            // Log device info
             val sdk = android.os.Build.VERSION.SDK_INT
             val model = android.os.Build.MODEL ?: "unknown"
             android.util.Log.d("DETECT_INFO", "detectOdometer called on SDK=$sdk model=$model path=$imagePath")
 
-            // Prepare decode options and downsample if image is large
+            // 1. PREPARE DECODING (Downsampling to prevent OOM)
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            
+            // Handle content:// vs file:// for bounds checking
             if (imagePath.startsWith("content://")) {
                 val uri = android.net.Uri.parse(imagePath)
                 reactApplicationContext.contentResolver.openInputStream(uri).use { stream ->
@@ -112,7 +111,7 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
                 BitmapFactory.decodeFile(filePath, options)
             }
 
-            // compute sensible inSampleSize to limit max dimension (e.g. 1600)
+            // Calculate inSampleSize
             val maxDim = 1600
             var inSample = 1
             val width = options.outWidth
@@ -127,8 +126,8 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
 
-            // Decode actual bitmap (handle content:// or file://)
-            val original: Bitmap? = try {
+            // 2. DECODE BITMAP
+            var original: Bitmap? = try {
                 if (imagePath.startsWith("content://")) {
                     val uri = android.net.Uri.parse(imagePath)
                     reactApplicationContext.contentResolver.openInputStream(uri).use { stream ->
@@ -140,7 +139,7 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
                 }
             } catch (oom: OutOfMemoryError) {
                 System.gc()
-                promise.reject("MEMORY_ERROR", "OutOfMemory while decoding image on SDK=$sdk model=$model")
+                promise.reject("MEMORY_ERROR", "OutOfMemory while decoding image")
                 return
             }
 
@@ -149,35 +148,83 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
                 return
             }
 
-            // Run detections with safeguards for OOM
+            // 3. FIX ROTATION (Added Logic)
+            try {
+                // Only attempt Exif reading on file paths, as content streams require different handling
+                // and usually come pre-oriented from Gallery pickers.
+                if (!imagePath.startsWith("content://")) {
+                    val filePath = imagePath.removePrefix("file://")
+                    val exifInterface = ExifInterface(filePath)
+                    val orientation = exifInterface.getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_UNDEFINED
+                    )
+
+                    val rotationInDegrees = when (orientation) {
+                        ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                        ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                        ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                        else -> 0
+                    }
+
+                    if (rotationInDegrees != 0) {
+                        val matrix = Matrix()
+                        matrix.postRotate(rotationInDegrees.toFloat())
+                        
+                        val rotatedBitmap = Bitmap.createBitmap(
+                            original, 0, 0, original.width, original.height, matrix, true
+                        )
+                        
+                        if (original != rotatedBitmap) {
+                            original.recycle()
+                        }
+                        original = rotatedBitmap
+                        android.util.Log.d("ROTATION_INFO", "Rotated image by $rotationInDegrees degrees")
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ROTATION_ERROR", "Failed to correct orientation", e)
+                // Continue with original bitmap even if rotation fails
+            }
+
+            // 4. INFERENCE (Run Predictions)
             val fullSummary = try {
-                runPredictionPass(original, isCenterCrop = false)
+                runPredictionPass(original!!, isCenterCrop = false)
             } catch (oom: OutOfMemoryError) {
-                original.recycle()
+                original!!.recycle()
                 System.gc()
-                promise.reject("MEMORY_ERROR", "OOM during inference on SDK=$sdk model=$model")
+                promise.reject("MEMORY_ERROR", "OOM during inference")
                 return
             }
 
             val cropSummary = try {
-                runPredictionPass(original, isCenterCrop = true)
+                runPredictionPass(original!!, isCenterCrop = true)
             } catch (oom: OutOfMemoryError) {
-                // proceed with fullSummary if crop pass OOMs
                 android.util.Log.w("DETECT_WARN", "OOM during crop pass, continuing with fullSummary")
                 PredictionSummary("", null, 0, 0f)
             }
 
-            // choose best result (existing logic)
+            // 5. CHOOSE BEST RESULT
             var best = fullSummary
             var decision = "Original"
+
             if (cropSummary.digitCount > fullSummary.digitCount) {
-                best = cropSummary; decision = "Cropped"
+                best = cropSummary
+                decision = "Cropped"
             } else if (cropSummary.digitCount == fullSummary.digitCount && fullSummary.digitCount > 0) {
-                if (cropSummary.type != null && fullSummary.type == null) { best = cropSummary; decision = "Cropped" }
-                else if (cropSummary.avgConfidence > fullSummary.avgConfidence) { best = cropSummary; decision = "Cropped" }
+                if (cropSummary.type != null && fullSummary.type == null) {
+                    best = cropSummary
+                    decision = "Cropped"
+                } else if (cropSummary.avgConfidence > fullSummary.avgConfidence) {
+                    best = cropSummary
+                    decision = "Cropped"
+                }
             }
 
-            original.recycle()
+            // 6. CLEANUP & RESOLVE
+            if (!original!!.isRecycled) {
+                original.recycle()
+            }
             System.gc()
 
             val result = Arguments.createMap().apply {
@@ -197,7 +244,8 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    // Menjalankan satu pass prediksi (dengan atau tanpa crop)
+    // --- HELPER FUNCTIONS REMAIN UNCHANGED ---
+
     private fun runPredictionPass(source: Bitmap, isCenterCrop: Boolean): PredictionSummary {
         var tempBitmap: Bitmap? = null
         try {
@@ -206,8 +254,6 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
                 if (ratio < 0.6f || ratio > 1.7f) {
                     return PredictionSummary("", null, 0, 0f)
                 }
-
-                // Buat center crop
                 tempBitmap = cropCenterWithMargin(source, modelInputSize, modelInputSize, marginPx = 60)
             } else {
                 val lb = letterboxBitmap(source, modelInputSize)
@@ -223,10 +269,8 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    // Menjalankan tflite inference
     private fun runInference(bitmap: Bitmap): List<BoxDetection> {
         val inputBuffer = preprocessImage(bitmap, modelInputSize)
-
         val outputShape = tfliteInterpreter?.getOutputTensor(0)?.shape() ?: intArrayOf(1, 16, 8400)
         val output = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
 
@@ -234,10 +278,9 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return getRawDetections(output)
     }
 
-    // Fungsi untuk parsing deteksi menjadi ringkasan prediksi
     private fun parseDetections(detections: List<BoxDetection>): PredictionSummary {
         val digits = detections.filter { it.label.matches(Regex("^[0-9]$")) }.toMutableList()
-        val typeDetections = detections.filter { it.label == "analog" || it.label == "digital" }
+        val typeDetections = detections.filter { it.label == "Analog" || it.label == "Digital" }
         val bestType = typeDetections.maxByOrNull { it.confidence }?.label
 
         if (digits.isEmpty()) {
@@ -252,7 +295,6 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return PredictionSummary(value, bestType, digits.size, avgConf)
     }
 
-    // Fungsi crop center dengan margin
     private fun cropCenterWithMargin(source: Bitmap, targetW: Int, targetH: Int, marginPx: Int): Bitmap {
         val imgW = source.width
         val imgH = source.height
@@ -274,7 +316,6 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return resized
     }
 
-    // Fungsi letterbox
     private fun letterboxBitmap(source: Bitmap, targetSize: Int): LetterboxResult {
         val originalWidth = source.width
         val originalHeight = source.height
@@ -296,7 +337,6 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return LetterboxResult(background, scale, padX, padY, targetSize)
     }
 
-    // Fungsi preprocessing gambar menjadi input tensor
     private fun preprocessImage(bitmap: Bitmap, targetSize: Int): ByteBuffer {
         val scaled = if (bitmap.width != targetSize || bitmap.height != targetSize) {
             Bitmap.createScaledBitmap(bitmap, targetSize, targetSize, true)
@@ -323,9 +363,8 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return inputBuffer
     }
 
-    // Ekstrak deteksi raw dari output model
     private fun getRawDetections(output: Array<Array<FloatArray>>): List<BoxDetection> {
-        val classNames = listOf("0","1","2","3","4","5","6","7","8","9","analog","digital")
+        val classNames = listOf("0","1","2","3","4","5","6","7","8","9","Analog","Digital")
         val confThreshold = 0.3f
         val iouThreshold = 0.5f
 
@@ -363,7 +402,6 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return applyNMS(all, iouThreshold)
     }
 
-    // Fungsi Non-Maximum Suppression untuk menyaring deteksi
     private fun applyNMS(detections: List<BoxDetection>, iouThreshold: Float): List<BoxDetection> {
         val sorted = detections.sortedByDescending { it.confidence }.toMutableList()
         val kept = mutableListOf<BoxDetection>()
@@ -381,7 +419,6 @@ class ImageHelpersModule(reactContext: ReactApplicationContext) :
         return kept
     }
 
-    // Fungsi untuk menghitung IoU (Intersection over Union) antara dua box
     private fun calculateIoU(box1: FloatArray, box2: FloatArray): Float {
         val x1 = max(box1[0], box2[0])
         val y1 = max(box1[1], box2[1])
