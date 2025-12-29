@@ -1,4 +1,4 @@
-import {useState, useEffect, useRef, useCallback} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {
   View,
   Text,
@@ -54,14 +54,14 @@ const OdometerDetectionScreen = () => {
   const [odometerValue, setOdometerValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [appState, setAppState] = useState(AppState.currentState);
+  const [_appState, setAppState] = useState(AppState.currentState);
   const [cameraKey, setCameraKey] = useState(0);
   const [isResultMode, setIsResultMode] = useState(false);
   const [capturedImageUri, setCapturedImageUri] = useState<string | null>(null);
 
-  const removeFilePrefix = (filePath: string) => {
+  const removeFilePrefix = useCallback((filePath: string) => {
     return filePath.replace(/^file:\/\//, '');
-  };
+  }, []);
 
   // Membersihkan temp files
   const cleanupTempFiles = useCallback(async () => {
@@ -188,7 +188,7 @@ const OdometerDetectionScreen = () => {
     setCapturedImageUri(null);
     resetDetection();
     setCameraActive(true);
-  }, [capturedImageUri, resetDetection]);
+  }, [capturedImageUri, resetDetection, removeFilePrefix]);
 
   // Handle hasil deteksi
   const handleDetectionResult = useCallback(
@@ -343,7 +343,7 @@ const OdometerDetectionScreen = () => {
       setOdometerType(detectedType);
       setOdometerValue(detectedValue);
     },
-    [resetDetection, resetToCamera, cleanupTempFiles],
+    [resetToCamera, cleanupTempFiles],
   );
 
   // Proses gambar
@@ -397,7 +397,7 @@ const OdometerDetectionScreen = () => {
           });
       }, 500);
     },
-    [handleDetectionResult, resetDetection, resetToCamera],
+    [handleDetectionResult, resetDetection, resetToCamera, cleanupTempFiles],
   );
 
   // Ambil foto dari kamera
@@ -445,7 +445,7 @@ const OdometerDetectionScreen = () => {
       Alert.alert('Error', 'Gagal memilih gambar dari galeri.');
       setIsProcessing(false);
     }
-  }, [isProcessing, processImage]);
+  }, [isProcessing, processImage, removeFilePrefix]);
 
   // Share handler hasil deteksi
   const handleShare = useCallback(async () => {
@@ -485,7 +485,9 @@ const OdometerDetectionScreen = () => {
         console.log('Using raw image as fallback:', screenshotUri);
       }
 
-      if (!screenshotUri) return;
+      if (!screenshotUri) {
+        return;
+      }
 
       let fileUri = screenshotUri;
       if (!fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
